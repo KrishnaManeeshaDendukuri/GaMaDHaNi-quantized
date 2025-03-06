@@ -67,6 +67,7 @@ class ConvBlock(nn.Module):
                  nonlinearity: Optional[str] = None,
                  up: bool = False,
                  dropout: float = 0.0,
+                 group_norm: bool = True,
                  ):
         super(ConvBlock, self).__init__()
         self.inp_dim = inp_dim
@@ -77,17 +78,26 @@ class ConvBlock(nn.Module):
             self.nonlinearity = get_activation(nonlinearity)
         else:
             self.nonlinearity = None
+
         if up:
             self.conv = get_layer(nn.ConvTranspose1d(inp_dim, out_dim, kernel_size=kernel_size, stride=stride, padding=padding), norm)
         else:
             self.conv = get_layer(nn.Conv1d(inp_dim, out_dim, kernel_size=kernel_size, stride=stride, padding=padding), norm)
 
+        if group_norm:
+            self.group_norm = nn.GroupNorm(1, out_dim)
+        else:
+            self.group_norm = None
+
         self.layers = nn.ModuleList()
+
+        self.layers.append(self.conv)
+        if self.group_norm is not None:
+            self.layers.append(self.group_norm)
         if self.nonlinearity is not None:
             self.layers.append(self.nonlinearity)
         if dropout > 0:
             self.layers.append(nn.Dropout(dropout))
-        self.layers.append(self.conv)
 
     def forward(self, x):
         for layer in self.layers:
@@ -103,6 +113,7 @@ class UpSampleLayer(nn.Module):
                 num_convs: int = 2,
                 norm: bool = True,
                 nonlinearity: Optional[str] = None,
+                group_norm: bool = True,
                 dropout: float = 0.0,
                 ):
         super(UpSampleLayer, self).__init__()
@@ -111,9 +122,9 @@ class UpSampleLayer(nn.Module):
 
         self.convs = nn.ModuleList([])
 
-        self.convs.append(ConvBlock(inp_dim, out_dim, kernel_size=stride*2, stride=stride, padding=padding, norm=norm, nonlinearity=nonlinearity, up=True))  # first convolutional layer to upsample
+        self.convs.append(ConvBlock(inp_dim, out_dim, kernel_size=stride*2, stride=stride, padding=padding, norm=norm, nonlinearity=nonlinearity, group_norm=group_norm, up=True))  # first convolutional layer to upsample
         for ind in range(1, num_convs):
-            self.convs.append(ConvBlock(out_dim, out_dim, kernel_size=kernel_size, stride=1, padding="same", norm=norm, nonlinearity=nonlinearity, up=False, dropout=dropout if ind == num_convs-1 else 0))
+            self.convs.append(ConvBlock(out_dim, out_dim, kernel_size=kernel_size, stride=1, padding="same", norm=norm, nonlinearity=nonlinearity, group_norm=group_norm, up=False, dropout=dropout if ind == num_convs-1 else 0))
 
     def forward(self, x):
         for conv in self.convs:
@@ -130,6 +141,7 @@ class DownSampleLayer(nn.Module):
                 num_convs: int = 2,
                 norm: bool = True,
                 nonlinearity: Optional[str] = None,
+                group_norm: bool = True,
                 dropout: float = 0.0,
                 ):
         super(DownSampleLayer, self).__init__()
@@ -138,9 +150,9 @@ class DownSampleLayer(nn.Module):
 
         self.convs = nn.ModuleList([])
 
-        self.convs.append(ConvBlock(inp_dim, out_dim, kernel_size=stride*2, stride=stride, padding=padding, norm=norm, nonlinearity=nonlinearity, up=False))  # first convolutional layer to upsample
+        self.convs.append(ConvBlock(inp_dim, out_dim, kernel_size=stride*2, stride=stride, padding=padding, norm=norm, nonlinearity=nonlinearity, group_norm=group_norm, up=False))  # first convolutional layer to upsample
         for ind in range(1, num_convs):
-            self.convs.append(ConvBlock(out_dim, out_dim, kernel_size=kernel_size, stride=1, padding="same", norm=norm, nonlinearity=nonlinearity, up=False, dropout=dropout if ind == num_convs-1 else 0))
+            self.convs.append(ConvBlock(out_dim, out_dim, kernel_size=kernel_size, stride=1, padding="same", norm=norm, nonlinearity=nonlinearity, group_norm=group_norm, up=False, dropout=dropout if ind == num_convs-1 else 0))
 
     def forward(self, x):
         for conv in self.convs:
@@ -200,6 +212,7 @@ class ResNetBlock(nn.Module):
                  out_channels: int,
                  dropout: float = 0.0,
                  nonlinearity: Optional[str] = None,
+                 group_norm: bool = True,
                  kernel_size: int = 3,
                  stride: int = 1,
                  norm: bool = True,
@@ -223,9 +236,9 @@ class ResNetBlock(nn.Module):
                 self.input_layers.append(nn.Identity())
 
         if up:
-            self.process_layer = UpSampleLayer(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=stride//2, num_convs=num_convs, norm=norm, nonlinearity=nonlinearity, dropout=dropout)
+            self.process_layer = UpSampleLayer(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=stride//2, num_convs=num_convs, norm=norm, nonlinearity=nonlinearity, group_norm=group_norm, dropout=dropout)
         else:
-            self.process_layer = DownSampleLayer(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=stride//2, num_convs=num_convs, norm=norm, nonlinearity=nonlinearity, dropout=dropout)
+            self.process_layer = DownSampleLayer(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=stride//2, num_convs=num_convs, norm=norm, nonlinearity=nonlinearity, group_norm=group_norm, dropout=dropout)
 
     def forward(self, x):
         inputs = x.clone()
@@ -754,6 +767,7 @@ class UNetPitchConditioned(UNetBase):
                  project_dim=None,
                  dropout=0.0,
                  nonlinearity=None,
+                 group_norm=True,
                  norm=True,
                  num_convs=2,
                  num_attns=2,
@@ -823,6 +837,7 @@ class UNetPitchConditioned(UNetBase):
                         stride=strides[ind],
                         dropout=dropout,
                         nonlinearity=nonlinearity,
+                        group_norm=group_norm,
                         norm=norm,
                         num_convs=num_convs,
                         ) for ind in range(1, len(features))
@@ -851,6 +866,7 @@ class UNetPitchConditioned(UNetBase):
             stride=strides[ind],
             dropout=dropout,
             nonlinearity=nonlinearity,
+            group_norm=group_norm,
             norm=norm,
             num_convs=num_convs,
             up=True
